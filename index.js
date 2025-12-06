@@ -1,8 +1,7 @@
 const express = require("express");
 const line = require("@line/bot-sdk");
 const axios = require("axios");
-const { GoogleSpreadsheet } = require("google-spreadsheet");
-const { JWT } = require("google-auth-library");
+const { createClient } = require("@supabase/supabase-js"); // Supabase読み込み
 require("dotenv").config();
 
 // --- 設定部分 ---
@@ -14,10 +13,14 @@ const config = {
 const client = new line.Client(config);
 const app = express();
 
+// --- Supabase接続設定 ---
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
 // --- メイン処理 ---
 app.post("/webhook", line.middleware(config), async (req, res) => {
   try {
-    // すべてのイベントを処理（Promise.allで並列処理）
     const result = await Promise.all(req.body.events.map(handleEvent));
     res.json(result);
   } catch (err) {
@@ -26,9 +29,7 @@ app.post("/webhook", line.middleware(config), async (req, res) => {
   }
 });
 
-// イベントハンドラー
 async function handleEvent(event) {
-  // テキストメッセージ以外は無視
   if (event.type !== "message" || event.message.type !== "text") {
     return Promise.resolve(null);
   }
@@ -38,10 +39,8 @@ async function handleEvent(event) {
   const replyToken = event.replyToken;
 
   try {
-    // 1. ログ保存 (User) - エラーでも止まらないようにcatchする
-    await logToSheet(userId, userMessage, "User").catch((e) =>
-      console.error("Sheet Error (User):", e.message)
-    );
+    // 1. ログ保存 (User)
+    await logToSupabase(userId, userMessage, "User");
 
     // 2. Grok (xAI) に問い合わせ
     const botResponse = await callGrokAPI(userMessage);
@@ -53,23 +52,19 @@ async function handleEvent(event) {
     });
 
     // 4. ログ保存 (Bot)
-    await logToSheet(userId, botResponse, "Bot").catch((e) =>
-      console.error("Sheet Error (Bot):", e.message)
-    );
+    await logToSupabase(userId, botResponse, "Bot");
   } catch (err) {
     console.error("処理エラー:", err);
-    // エラー時のログ
-    await logToSheet(userId, `エラー発生: ${err.toString()}`, "System").catch(
-      (e) => console.error("Sheet Error (System):", e)
-    );
+    await logToSupabase(userId, `エラー発生: ${err.toString()}`, "System");
   }
 }
 
 // --- Grok (xAI) API呼び出し ---
 async function callGrokAPI(userMessage) {
   const apiKey = process.env.XAI_API_KEY;
-  const modelName = process.env.MODEL_NAME || "grok-beta"; // 環境変数になければデフォルト
+  const modelName = process.env.MODEL_NAME || "grok-beta";
 
+  // プロンプト設定
   const systemPrompt = `
   あなたは「むっくん」という名前の、優しく共感力の高い心理カウンセラーです。
   ミニチュアシュナウザーという犬種で、3歳の犬です。
@@ -116,43 +111,29 @@ async function callGrokAPI(userMessage) {
   }
 }
 
-// --- スプレッドシート記録関数 (Google Service Account必須) ---
-async function logToSheet(userId, text, speaker) {
-  const sheetId = process.env.SPREADSHEET_ID;
-  const clientEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-  // Render等の環境変数では改行がスペースに置換されることがあるため、修正する処理
-  const privateKey = process.env.GOOGLE_PRIVATE_KEY
-    ? process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n")
-    : undefined;
+// --- ★Supabaseへの保存関数 ---
+async function logToSupabase(userId, text, speaker) {
+  try {
+    // スプレッドシートやSQLよりも直感的！
+    const { error } = await supabase
+      .from("chat_logs") // テーブル名
+      .insert({
+        user_id: userId,
+        speaker: speaker,
+        message: text,
+        // created_at は自動で入るので省略OK
+      });
 
-  // 設定が足りない場合はコンソールログだけ出して終了（エラーにはしない）
-  if (!sheetId || !clientEmail || !privateKey) {
-    console.log(`[LocalLog] ${speaker} (${userId}): ${text}`);
-    return;
+    if (error) {
+      console.error("Supabase Error:", error);
+    } else {
+      console.log(`[Supabase Log] ${speaker}: ${text}`);
+    }
+  } catch (err) {
+    console.error("Log Error:", err);
   }
-
-  // 認証設定
-  const serviceAccountAuth = new JWT({
-    email: clientEmail,
-    key: privateKey,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets"],
-  });
-
-  const doc = new GoogleSpreadsheet(sheetId, serviceAccountAuth);
-
-  await doc.loadInfo();
-  const sheet = doc.sheetsByIndex[0]; // 1枚目のシートを使用
-
-  // 行を追加
-  await sheet.addRow({
-    date: new Date().toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }),
-    userId: userId,
-    speaker: speaker,
-    text: text,
-  });
 }
 
-// サーバー起動
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
   console.log(`listening on ${port}`);
