@@ -1,13 +1,19 @@
 {
-  "name": "line-bot-nodejs",
-  "version": "1.0.0",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js" 
-  },
-  "dependencies": {
-    "@line/bot-sdk": "^X.X.X",
-    "dotenv": "^X.X.X",
-    "express": "^X.X.X"
+    "name": "line-bot-supabase",
+    "version": "1.0.0",
+    "description": "LINE Bot with Grok AI and Supabase",
+    "main": "index.js",
+    "scripts": {
+      "start": "node index.js"
+    },
+    "dependencies": {
+      "@line/bot-sdk": "^9.5.0",
+      "@supabase/supabase-js": "^2.47.0",
+      "axios": "^1.7.9",
+      "dotenv": "^16.4.7",
+      "express": "^4.21.2"
+    },
+    "engines": {
+      "node": ">=18.0.0"
+    }
   }
-}
